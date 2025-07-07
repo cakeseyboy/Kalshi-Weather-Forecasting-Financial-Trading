@@ -1,0 +1,11 @@
+requests
+urllib3
+python-dateutil
+pandas
+python-metar
+numpy
+torch
+scikit-learn
+pytz
+libsql-client
+python-dotenv

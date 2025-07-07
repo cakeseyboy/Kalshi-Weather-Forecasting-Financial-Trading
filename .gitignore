@@ -1,0 +1,29 @@
+# Python cruft
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Envs
+.env
+.venv/
+env/
+venv/
+
+# OS
+.DS_Store
+
+# Data
+data/*
+!data/README.md  # Keep placeholder if needed
+
+# Models
+model/*
+!model/README.md
+
+# Logs
+*.log
+logs/
