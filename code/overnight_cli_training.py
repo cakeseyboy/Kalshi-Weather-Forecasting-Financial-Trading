@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-TRAINING_SCRIPT = 'code/train_contextual_transformer_cli.py'
+TRAINING_SCRIPT = 'code/train_cli_gpu.py'
 RESULTS_LOG = 'data/overnight_training_log.csv'
 BEST_MODEL_DIR = 'model/best_cli'
 DB_URL = os.getenv("TURSO_DATABASE_URL")
@@ -60,7 +60,7 @@ class OvernightTrainer:
         while True:
             # Use pgrep to check for training process (simpler than psutil)
             try:
-                result = subprocess.run(['pgrep', '-f', 'train_contextual_transformer_cli.py'], 
+                result = subprocess.run(['pgrep', '-f', 'train_cli_gpu.py'], 
                                       capture_output=True, text=True)
                 
                 if result.returncode != 0:
@@ -91,11 +91,11 @@ class OvernightTrainer:
         if random_seed is None:
             random_seed = int(time.time()) % 10000  # Use timestamp-based seed
         
-        # Set random seeds for reproducibility
-        torch.manual_seed(random_seed)
-        np.random.seed(random_seed)
-        
+        # Generate a unique model version for this run
+        model_version = f"run_{run_number}_seed_{random_seed}"
+
         print(f"Random seed: {random_seed}")
+        print(f"Model Version: {model_version}")
         print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Training script: {TRAINING_SCRIPT}")
         print(f"\n🔥 REAL-TIME TRAINING OUTPUT:")
@@ -104,7 +104,15 @@ class OvernightTrainer:
         # Run training script with real-time output
         try:
             # Activate virtual environment and run training
-            cmd = ['source', '.venv/bin/activate', '&&', 'python', TRAINING_SCRIPT]
+            cmd = [
+                'source', '.venv/bin/activate', '&&',
+                'python', TRAINING_SCRIPT,
+                '--model_version', model_version,
+                '--epochs', str(150), # Example: fixed epochs for overnight runs
+                '--batch_size', str(32), # Example: fixed batch size
+                '--learning_rate', str(0.001), # Example: fixed learning rate
+                f"--notes='Overnight run {run_number} with seed {random_seed}'" # Pass as a single string with quotes
+            ]
             
             # Use Popen for real-time output
             process = subprocess.Popen(
@@ -140,17 +148,16 @@ class OvernightTrainer:
             print(f"   Exit code: {process.returncode}")
             
             # Parse output for metrics
-            mae, accuracy, epochs = self.parse_training_output(full_output)
+            mae, accuracy = self.parse_training_output(full_output)
             
             print(f"   Final MAE: {mae:.3f}°F")
             print(f"   Rounding Accuracy: {accuracy:.1f}%")
-            print(f"   Epochs Completed: {epochs}")
             
             # Check if this is the best model
-            is_best = self.check_and_save_best_model(mae, accuracy, run_number, random_seed)
+            is_best = self.check_and_save_best_model(mae, accuracy, model_version)
             
             # Log results
-            self.log_results(run_number, start_time, end_time, duration, mae, accuracy, epochs, random_seed, is_best)
+            self.log_results(run_number, start_time, end_time, duration, mae, accuracy, 0, random_seed, is_best, model_version)
             
             if process.returncode != 0:
                 print(f"⚠️  Training failed with exit code {process.returncode}")
@@ -159,42 +166,25 @@ class OvernightTrainer:
             print(f"❌ Error in training run #{run_number}: {e}")
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds() / 60
-            self.log_results(run_number, start_time, end_time, duration, float('inf'), 0.0, 0, random_seed, False, f"ERROR: {str(e)}")
+            self.log_results(run_number, start_time, end_time, duration, float('inf'), 0.0, 0, random_seed, False, f"ERROR: {str(e)}", model_version)
     
     def parse_training_output(self, output):
         """Parse training output to extract final metrics"""
         lines = output.split('\n')
         mae = float('inf')
         accuracy = 0.0
-        epochs = 0
         
         for line in lines:
-            # Look for final performance line
+            # Look for final performance line from train_cli_gpu.py
             if "Final Performance:" in line:
                 parts = line.split()
-                for i, part in enumerate(parts):
-                    if "°F" in part:
-                        try:
-                            mae = float(part.replace('°F', ''))
-                        except:
-                            pass
-                    if "%" in part and "Rounding" in line:
-                        try:
-                            accuracy = float(part.replace('%', ''))
-                        except:
-                            pass
-            
-            # Count epochs
-            if "Epoch" in line and "/" in line:
-                try:
-                    epoch_part = line.split("Epoch")[1].split("/")[0].strip()
-                    epochs = max(epochs, int(epoch_part))
-                except:
-                    pass
+                mae = float(parts[3].replace('°F', ''))
+                accuracy = float(parts[6].replace('%', ''))
+                break
         
-        return mae, accuracy, epochs
+        return mae, accuracy
     
-    def check_and_save_best_model(self, mae, accuracy, run_number, random_seed):
+    def check_and_save_best_model(self, mae, accuracy, model_version):
         """Check if this is the best model and save it"""
         is_best = False
         
@@ -209,13 +199,13 @@ class OvernightTrainer:
             try:
                 import shutil
                 
-                # Source files (current model)
-                model_src = 'model/klax_contextual_transformer_cli.pth'
-                scaler_src = 'model/contextual_cli_scaler.pkl'
+                # Source files are now in the versioned directory
+                model_src = os.path.join('model', model_version, 'model.pth')
+                scaler_src = os.path.join('model', model_version, 'scaler.pkl')
                 
                 # Destination files (best model)
-                model_dst = f'{BEST_MODEL_DIR}/klax_contextual_transformer_cli_best.pth'
-                scaler_dst = f'{BEST_MODEL_DIR}/contextual_cli_scaler_best.pkl'
+                model_dst = os.path.join(BEST_MODEL_DIR, 'klax_contextual_transformer_cli_best.pth')
+                scaler_dst = os.path.join(BEST_MODEL_DIR, 'contextual_cli_scaler_best.pkl')
                 
                 if os.path.exists(model_src):
                     shutil.copy2(model_src, model_dst)
@@ -230,10 +220,11 @@ class OvernightTrainer:
                     'random_seed': random_seed,
                     'timestamp': datetime.now().isoformat(),
                     'model_path': model_dst,
-                    'scaler_path': scaler_dst
+                    'scaler_path': scaler_dst,
+                    'model_version': model_version # Add model version to best model metadata
                 }
                 
-                with open(f'{BEST_MODEL_DIR}/best_model_metadata.json', 'w') as f:
+                with open(os.path.join(BEST_MODEL_DIR, 'best_model_metadata.json'), 'w') as f:
                     json.dump(metadata, f, indent=2)
                 
                 print(f"   ✅ Best model saved to {BEST_MODEL_DIR}/")
@@ -243,7 +234,7 @@ class OvernightTrainer:
         
         return is_best
     
-    def log_results(self, run_number, start_time, end_time, duration, mae, accuracy, epochs, random_seed, is_best, notes=""):
+    def log_results(self, run_number, start_time, end_time, duration, mae, accuracy, epochs, random_seed, is_best, model_version, notes=""):
         """Log results to CSV file"""
         new_row = {
             'run_number': run_number,
@@ -255,9 +246,10 @@ class OvernightTrainer:
             'best_mae': 'YES' if is_best else 'NO',
             'epochs_completed': epochs,
             'random_seed': random_seed,
-            'model_path': 'model/klax_contextual_transformer_cli.pth',
-            'scaler_path': 'model/contextual_cli_scaler.pkl',
-            'notes': notes
+            'model_path': os.path.join('model', model_version, 'model.pth'),
+            'scaler_path': os.path.join('model', model_version, 'scaler.pkl'),
+            'notes': notes,
+            'model_version': model_version
         }
         
         # Append to CSV
@@ -334,10 +326,17 @@ class OvernightTrainer:
             successful_runs = df[df['final_mae'] != 'FAILED']
             
             if len(successful_runs) > 0:
-                print(f"   Success Rate: {len(successful_runs)/len(df)*100:.1f}%")
-                print(f"   MAE Range: {successful_runs['final_mae'].min():.3f} - {successful_runs['final_mae'].max():.3f}°F")
-                print(f"   Accuracy Range: {successful_runs['final_accuracy'].min():.1f} - {successful_runs['final_accuracy'].max():.1f}%")
-                print(f"   Avg Duration: {successful_runs['duration_minutes'].mean():.1f} minutes")
+                # Convert 'final_mae' to numeric, coercing errors to NaN, then drop NaNs
+                successful_runs['final_mae'] = pd.to_numeric(successful_runs['final_mae'], errors='coerce')
+                successful_runs = successful_runs.dropna(subset=['final_mae'])
+
+                if len(successful_runs) > 0:
+                    print(f"   Success Rate: {len(successful_runs)/len(df)*100:.1f}%")
+                    print(f"   MAE Range: {successful_runs['final_mae'].min():.3f} - {successful_runs['final_mae'].max():.3f}°F")
+                    print(f"   Accuracy Range: {successful_runs['final_accuracy'].min():.1f} - {successful_runs['final_accuracy'].max():.1f}%")
+                    print(f"   Avg Duration: {successful_runs['duration_minutes'].mean():.1f} minutes")
+                else:
+                    print("   No successful runs to display statistics for.")
         
         print(f"\n🎯 Best model ready for Kalshi trading!")
 

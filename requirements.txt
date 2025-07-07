@@ -9,3 +9,4 @@ scikit-learn
 pytz
 libsql-client
 python-dotenv
+tqdm

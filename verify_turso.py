@@ -27,6 +27,30 @@ async def verify_turso_data():
                     rs = await client.execute(f"SELECT COUNT(*) FROM {table}")
                     count = rs.rows[0][0]
                     print(f"- Table '{table}' has {count} rows.")
+            
+            # 3. Check recent training logs
+            print("\n--- Recent Training Logs (training_runs_log) ---")
+            try:
+                rs_logs = await client.execute("SELECT * FROM training_runs_log ORDER BY id DESC LIMIT 5")
+                if rs_logs and hasattr(rs_logs, 'rows') and rs_logs.rows:
+                    for row in rs_logs.rows:
+                        print(row)
+                else:
+                    print(f"No training logs found or empty result set. Type: {type(rs_logs)}")
+            except Exception as e:
+                print(f"Error fetching training logs: {e}")
+
+            # 4. Check recent model metadata
+            print("\n--- Recent Model Metadata (model_metadata) ---")
+            try:
+                rs_metadata = await client.execute("SELECT * FROM model_metadata ORDER BY training_date DESC LIMIT 5")
+                if rs_metadata and hasattr(rs_metadata, 'rows') and rs_metadata.rows:
+                    for row in rs_metadata.rows:
+                        print(row)
+                else:
+                    print(f"No model metadata found or empty result set. Type: {type(rs_metadata)}")
+            except Exception as e:
+                print(f"Error fetching model metadata: {e}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
